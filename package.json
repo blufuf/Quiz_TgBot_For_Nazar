@@ -1,0 +1,21 @@
+{
+  "name": "Quiz_TgBot_For_Naraz",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon index.js",
+    "start": "node index.js"
+  },
+  "private": true,
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "express": "^5.1.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "nodemon": "^3.1.9",
+    "sqlite3": "^5.1.7",
+    "telegraf": "^4.16.3"
+  }
+}
