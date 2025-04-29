@@ -7,7 +7,6 @@ const SUPPORT_CHAT_ID = config.SUPPORT_CHAT_ID;
 const db = new sqlite3.Database(config.DB_PATH);
 const showImages = config.SHOW_IMAGES;
 
-
 const quizNames = {
     'sub_btn1_1': 'The Big Bang Theory - Заполни пропуск',
     'sub_btn1_2': 'The Big Bang Theory - Трансформации',
