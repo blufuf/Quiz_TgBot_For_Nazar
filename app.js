@@ -894,7 +894,7 @@ bot.onText(/\/test_(\d{2}\.\d{2}\.\d{4})/, (msg, match) => {
     });
 });
 
-// Добавим также команду /stats_dates для просмотра дат, за которые есть статистика
+
 bot.onText(/\/tests_dates/, (msg) => {
     if (!ADMIN_IDS.includes(msg.from.id)) {
         return bot.sendMessage(msg.chat.id, "⛔ У вас нет прав доступа к этой команде");
