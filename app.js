@@ -788,7 +788,7 @@ bot.onText(/\/stats/, (msg) => {
     });
 });
 
-// Вспомогательная функция для форматирования даты
+
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleString('ru-RU', {
