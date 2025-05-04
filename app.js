@@ -821,7 +821,7 @@ bot.onText(/\/test_(\d{2}\.\d{2}\.\d{4})/, (msg, match) => {
     const dateTo = nextDay.toISOString().split('T')[0];
 
     db.all(`
-        SELECT 
+        SELECT
             us.user_id,
             us.username,
             us.first_name,
@@ -886,13 +886,14 @@ bot.onText(/\/test_(\d{2}\.\d{2}\.\d{4})/, (msg, match) => {
             message += `\n`;
         });
 
-        // Отправляем сообщение (может потребоваться разбивка на части, если слишком длинное)
+        // Отправляем сообщение
         bot.sendMessage(msg.chat.id, message, {
             parse_mode: 'HTML',
             disable_web_page_preview: true
         });
     });
 });
+
 
 // Добавим также команду /stats_dates для просмотра дат, за которые есть статистика
 bot.onText(/\/tests_dates/, (msg) => {
@@ -904,7 +905,7 @@ bot.onText(/\/tests_dates/, (msg) => {
         SELECT DISTINCT date(attempt_date) as stat_date
         FROM user_stats
         ORDER BY stat_date DESC
-        LIMIT 30
+            LIMIT 30
     `, (err, dates) => {
         if (err) {
             console.error('Ошибка при получении дат:', err);
@@ -916,7 +917,7 @@ bot.onText(/\/tests_dates/, (msg) => {
         }
 
         let message = "📅 <b>Доступные даты статистики</b>\n\n";
-        message += "Используйте команду /stats_DD.MM.YYYY для просмотра\n\n";
+        message += "Используйте команду /test_DD.MM.YYYY для просмотра\n\n";
 
         dates.forEach(date => {
             const formattedDate = new Date(date.stat_date).toLocaleDateString('ru-RU');
