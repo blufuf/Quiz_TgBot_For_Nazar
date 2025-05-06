@@ -986,6 +986,63 @@ bot.on('message', (msg) => {
         });
         showMainMenu(chatId);
     }
+
+    if (feedbackStates[chatId]?.waitingForAnnouncement && msg.text && !msg.text.startsWith('/')) {
+        const announcementText = msg.text;
+
+        // Получаем всех уникальных пользователей из базы
+        db.all("SELECT DISTINCT user_id FROM user_stats UNION SELECT DISTINCT user_id FROM bot_ratings",
+            async (err, users) => {
+                if (err || !users.length) {
+                    return bot.sendMessage(chatId, "❌ Не удалось получить список пользователей");
+                }
+
+                let successCount = 0;
+                let failCount = 0;
+                const totalUsers = users.length;
+
+                // Отправляем начальный статус
+                const statusMsg = await bot.sendMessage(chatId,
+                    `⏳ Начата рассылка для ${totalUsers} пользователей...`);
+
+                // Рассылаем сообщения с интервалом (чтобы не получить ограничение от Telegram)
+                for (const user of users) {
+                    try {
+                        await bot.sendMessage(user.user_id,
+                            "🎉 <b>Новое обновление бота!</b>\n\n" +
+                            announcementText +
+                            "\n\nПопробуйте новую функцию: /myres",
+                            { parse_mode: 'HTML' });
+                        successCount++;
+
+                        // Обновляем статус каждые 10 отправок
+                        if (successCount % 10 === 0) {
+                            bot.editMessageText(
+                                `⏳ Рассылка: ${successCount + failCount}/${totalUsers} (успешно: ${successCount})`,
+                                { chat_id: statusMsg.chat.id, message_id: statusMsg.message_id }
+                            );
+                        }
+
+                        // Задержка между сообщениями (200мс)
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                    } catch (e) {
+                        failCount++;
+                        console.error(`Не удалось отправить сообщение пользователю ${user.user_id}:`, e);
+                    }
+                }
+
+                // Финальный отчет
+                bot.editMessageText(
+                    `✅ Рассылка завершена!\n\n` +
+                    `Всего пользователей: ${totalUsers}\n` +
+                    `Успешно: ${successCount}\n` +
+                    `Не удалось: ${failCount}`,
+                    { chat_id: statusMsg.chat.id, message_id: statusMsg.message_id }
+                );
+
+                delete feedbackStates[chatId];
+            });
+    }
 });
 
 bot.onText(/\/support/, (msg) => {
@@ -1127,6 +1184,22 @@ bot.onText(/\/myres/, (msg) => {
             reply_markup: keyboard
         });
     });
+});
+
+bot.onText(/\/announce_new_feature/, (msg) => {
+    if (!ADMIN_IDS.includes(msg.from.id)) {
+        return bot.sendMessage(msg.chat.id, "⛔ У вас нет прав доступа к этой команде");
+    }
+
+    // Запрашиваем текст сообщения
+    bot.sendMessage(msg.chat.id, "Введите текст сообщения о новой функции:", {
+        reply_markup: { force_reply: true }
+    });
+
+    // Сохраняем состояние ожидания сообщения
+    feedbackStates[msg.chat.id] = {
+        waitingForAnnouncement: true
+    };
 });
 
 bot.on('callback_query', (query) => {
