@@ -113,6 +113,7 @@ const getBackButtonData = (quizType) => {
 
 bot.setMyCommands([
     { command: '/start', description: '🏠 Главное меню' },
+    { command: '/myres', description: '📊 Мои результаты' },
     { command: '/support', description: '🆘 Поддержка' },
     { command: '/instructions', description: '📚 Инструкции' }
 ]);
@@ -1043,6 +1044,90 @@ bot.onText(/\/start/, (msg) => {
     showMainMenu(msg.chat.id);
 });
 
+bot.onText(/\/myres/, (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    // Получаем общую статистику пользователя
+    db.all(`
+        SELECT
+            quiz_type,
+            COUNT(*) as attempts,
+            AVG(percentage) as avg_score,
+            MAX(percentage) as best_score,
+            MIN(percentage) as worst_score,
+            SUM(score) as total_correct,
+            SUM(total_questions) as total_questions,
+            strftime('%d.%m.%Y', MAX(attempt_date)) as last_date
+        FROM user_stats
+        WHERE user_id = ?
+        GROUP BY quiz_type
+        ORDER BY attempts DESC
+    `, [userId], (err, stats) => {
+        if (err) {
+            console.error('DB Error:', err);
+            return bot.sendMessage(chatId, "❌ Ошибка при получении результатов");
+        }
+
+        if (!stats.length) {
+            return bot.sendMessage(chatId,
+                "📊 У вас пока нет результатов.\n" +
+                "Пройдите несколько тестов, чтобы увидеть свою статистику!");
+        }
+
+        // Формируем сообщение
+        let message = `📊 <b>Ваши результаты</b>\n\n`;
+        const totalAttempts = stats.reduce((sum, s) => sum + s.attempts, 0);
+        const totalCorrect = stats.reduce((sum, s) => sum + s.total_correct, 0);
+        const totalQuestions = stats.reduce((sum, s) => sum + s.total_questions, 0);
+
+        message += `🔢 Всего тестов: <b>${totalAttempts}</b>\n`;
+        message += `✅ Правильных ответов: <b>${totalCorrect}/${totalQuestions}</b>\n`;
+        message += `📈 Общий процент: <b>${Math.round((totalCorrect / totalQuestions) * 100)}%</b>\n\n`;
+
+        // Группируем по категориям (The Big Bang Theory, The Simpsons и т.д.)
+        const categories = {};
+        stats.forEach(stat => {
+            const category = stat.quiz_type.split('_')[1]; // Получаем btn1, btn2 и т.д.
+            if (!categories[category]) {
+                categories[category] = {
+                    name: getCategoryName(category),
+                    tests: []
+                };
+            }
+            categories[category].tests.push(stat);
+        });
+
+        // Добавляем статистику по каждой категории
+        Object.values(categories).forEach(category => {
+            message += `🎬 <b>${category.name}</b>\n`;
+
+            category.tests.forEach(stat => {
+                const quizName = quizNames[stat.quiz_type]?.split(' - ')[1] || stat.quiz_type;
+                message += `   📌 ${quizName}:\n`;
+                message += `      ▪️ Попыток: <b>${stat.attempts}</b>\n`;
+                message += `      ▪️ Средний: <b>${Math.round(stat.avg_score)}%</b>\n`;
+                message += `      ▪️ Лучший: <b>${stat.best_score}%</b>\n`;
+                message += `      ▪️ Последняя: <b>${stat.last_date}</b>\n\n`;
+            });
+        });
+
+        // Добавляем кнопки
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: "📅 Последние 10 тестов", callback_data: "my_recent_results" },
+                    { text: "🏆 Лучшие результаты", callback_data: "my_best_results" }
+                ]
+            ]
+        };
+
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
+    });
+});
 
 bot.on('callback_query', (query) => {
     const chatId = query.message.chat.id;
@@ -1143,4 +1228,81 @@ bot.on('callback_query', (query) => {
             showMatchingQuestion(chatId);
         }
     }
+
+    if (query.data === 'my_recent_results') {
+        const chatId = query.message.chat.id;
+        const userId = query.from.id;
+
+        db.all(`
+            SELECT
+                quiz_type,
+                score,
+                total_questions,
+                percentage,
+                strftime('%d.%m.%Y %H:%M', attempt_date) as date
+            FROM user_stats
+            WHERE user_id = ?
+            ORDER BY attempt_date DESC
+                LIMIT 10
+        `, [userId], (err, attempts) => {
+            if (err || !attempts.length) {
+                return bot.answerCallbackQuery(query.id, {
+                    text: "❌ Нет данных о прохождениях",
+                    show_alert: true
+                });
+            }
+
+            let message = "🕒 <b>Ваши последние 10 тестов</b>\n\n";
+
+            attempts.forEach((attempt, index) => {
+                const category = getCategoryName(attempt.quiz_type.split('_')[1]);
+                const quizName = quizNames[attempt.quiz_type]?.split(' - ')[1] || attempt.quiz_type;
+                message += `${index + 1}. ${category} - ${quizName}\n`;
+                message += `   📅 ${attempt.date}\n`;
+                message += `   ✅ <b>${attempt.percentage}%</b> (${attempt.score}/${attempt.total_questions})\n\n`;
+            });
+
+            bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+            bot.answerCallbackQuery(query.id);
+        });
+    }
+    else if (query.data === 'my_best_results') {
+        const chatId = query.message.chat.id;
+        const userId = query.from.id;
+
+        db.all(`
+            SELECT
+                quiz_type,
+                score,
+                total_questions,
+                percentage,
+                strftime('%d.%m.%Y', attempt_date) as date
+            FROM user_stats
+            WHERE user_id = ?
+            ORDER BY percentage DESC, attempt_date DESC
+                LIMIT 5
+        `, [userId], (err, attempts) => {
+            if (err || !attempts.length) {
+                return bot.answerCallbackQuery(query.id, {
+                    text: "❌ Нет данных о прохождениях",
+                    show_alert: true
+                });
+            }
+
+            let message = "🏆 <b>Ваши лучшие результаты</b>\n\n";
+
+            attempts.forEach((attempt, index) => {
+                const category = getCategoryName(attempt.quiz_type.split('_')[1]);
+                const quizName = quizNames[attempt.quiz_type]?.split(' - ')[1] || attempt.quiz_type;
+                message += `${index + 1}. ${category}\n`;
+                message += `   🎯 ${quizName}: <b>${attempt.percentage}%</b>\n`;
+                message += `   📅 ${attempt.date}\n`;
+                message += `   ✅ ${attempt.score}/${attempt.total_questions}\n\n`;
+            });
+
+            bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+            bot.answerCallbackQuery(query.id);
+        });
+    }
+
 });
