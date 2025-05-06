@@ -801,85 +801,112 @@ function formatDate(dateString) {
     });
 }
 
-bot.onText(/\/test_(\d{2})\.(\d{2})\.(\d{4})/, (msg, match) => {
+bot.onText(/\/test_(\d{2})\.(\d{2})\.(\d{4})/, async (msg, match) => {
     if (!ADMIN_IDS.includes(msg.from.id)) {
         return bot.sendMessage(msg.chat.id, "⛔ У вас нет прав доступа к этой команде");
     }
 
-    const day = match[1];
-    const month = match[2];
-    const year = match[3];
-
-    // Формируем дату в формате YYYY-MM-DD
+    const [day, month, year] = match.slice(1);
     const targetDate = `${year}-${month}-${day}`;
 
-    // Для отладки выведем запрос
-    console.log(`Searching for date: ${targetDate}`);
+    try {
+        // 1. Проверяем наличие данных
+        const count = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT COUNT(*) as count FROM user_stats WHERE date(attempt_date) = ?`,
+                [targetDate],
+                (err, row) => err ? reject(err) : resolve(row.count)
+            );
+        });
 
-    db.all(`
-        SELECT
-            us.user_id,
-            us.username,
-            us.first_name,
-            us.last_name,
-            us.quiz_type,
-            us.score,
-            us.total_questions,
-            us.percentage,
-            strftime('%d.%m.%Y %H:%M', us.attempt_date) as formatted_date
-        FROM user_stats us
-        WHERE date(us.attempt_date) = ?
-        ORDER BY us.attempt_date DESC
-    `, [targetDate], (err, attempts) => {
-        if (err) {
-            console.error('DB Error:', err);
-            return bot.sendMessage(msg.chat.id, "❌ Ошибка базы данных");
+        if (count === 0) {
+            return bot.sendMessage(msg.chat.id, `📭 Нет данных за ${day}.${month}.${year}`);
         }
 
-        console.log(`Found ${attempts.length} attempts for ${targetDate}`);
+        // 2. Сообщение о начале обработки
+        const processingMsg = await bot.sendMessage(
+            msg.chat.id,
+            `🔍 Обработка ${count} записей за ${day}.${month}.${year}...`
+        );
 
-        if (!attempts.length) {
-            return bot.sendMessage(msg.chat.id,
-                `📭 Нет данных за ${day}.${month}.${year}\n` +
-                `Проверьте правильность даты и наличие данных`);
-        }
+        // 3. Получаем данные порциями
+        const batchSize = 100;
+        let offset = 0;
+        let userStats = {};
 
-        // Формируем сообщение
-        let message = `📊 Статистика за ${day}.${month}.${year}\n\n`;
-        message += `Всего прохождений: ${attempts.length}\n\n`;
-
-        // Группируем по пользователям
-        const usersStats = attempts.reduce((acc, attempt) => {
-            if (!acc[attempt.user_id]) {
-                acc[attempt.user_id] = {
-                    userInfo: `${attempt.first_name} ${attempt.last_name || ''} ${attempt.username ? `(@${attempt.username})` : ''}`,
-                    attempts: []
-                };
-            }
-            acc[attempt.user_id].attempts.push(attempt);
-            return acc;
-        }, {});
-
-        // Добавляем информацию по каждому пользователю
-        Object.entries(usersStats).forEach(([userId, userData]) => {
-            message += `👤 <b>${userData.userInfo}</b> (ID: ${userId})\n`;
-
-            userData.attempts.forEach(attempt => {
-                const quizName = quizNames[attempt.quiz_type] || attempt.quiz_type;
-                const time = attempt.formatted_date.split(' ')[1];
-                message += `   🕒 ${time} - ${quizName}: ` +
-                    `<b>${attempt.percentage}%</b> (${attempt.score}/${attempt.total_questions})\n`;
+        while (offset < count) {
+            const batch = await new Promise((resolve, reject) => {
+                db.all(
+                    `
+                    SELECT user_id, username, first_name, last_name, 
+                           quiz_type, score, total_questions, percentage,
+                           strftime('%H:%M', attempt_date) as time 
+                    FROM user_stats 
+                    WHERE date(attempt_date) = ?
+                    ORDER BY attempt_date DESC
+                    LIMIT ? OFFSET ?`,
+                    [targetDate, batchSize, offset],
+                    (err, rows) => err ? reject(err) : resolve(rows)
+                );
             });
 
-            message += `\n`;
-        });
+            // Обработка порции данных
+            batch.forEach(attempt => {
+                if (!userStats[attempt.user_id]) {
+                    userStats[attempt.user_id] = {
+                        userInfo: `${attempt.first_name} ${attempt.last_name || ''} ${attempt.username ? `(@${attempt.username})` : ''}`.trim(),
+                        attempts: []
+                    };
+                }
+                userStats[attempt.user_id].attempts.push(attempt);
+            });
 
-        bot.sendMessage(msg.chat.id, message, {
-            parse_mode: 'HTML',
-            disable_web_page_preview: true
-        });
-    });
+            offset += batchSize;
+
+            // Обновление статуса
+            await bot.editMessageText(
+                `⌛ Обработано ${Math.min(offset, count)}/${count} записей...`,
+                { chat_id: msg.chat.id, message_id: processingMsg.message_id }
+            );
+        }
+
+        // 4. Формируем итоговые сообщения
+        const header = `📊 Статистика за ${day}.${month}.${year}\n\nВсего прохождений: ${count}\n\n`;
+        const messageParts = [];
+        let currentPart = header;
+
+        for (const [userId, userData] of Object.entries(userStats)) {
+            const userEntry = `👤 <b>${userData.userInfo}</b> (ID: ${userId})\n` +
+                userData.attempts.map(a =>
+                    `   🕒 ${a.time} - ${quizNames[a.quiz_type]}: ${a.percentage}% (${a.score}/${a.total_questions})`
+                ).join('\n') + '\n';
+
+            if (currentPart.length + userEntry.length > 4000) {  // чуть меньше лимита телеги в 4096
+                messageParts.push(currentPart);
+                currentPart = userEntry;
+            } else {
+                currentPart += userEntry;
+            }
+        }
+
+        if (currentPart.length > 0) {
+            messageParts.push(currentPart);
+        }
+
+        // 5. Удаляем сообщение о процессе
+        await bot.deleteMessage(msg.chat.id, processingMsg.message_id);
+
+        // 6. Отправляем результат по частям
+        for (const part of messageParts) {
+            await bot.sendMessage(msg.chat.id, part, { parse_mode: 'HTML' });
+        }
+
+    } catch (err) {
+        console.error('Error in stats command:', err);
+        bot.sendMessage(msg.chat.id, "❌ Произошла ошибка при получении статистики");
+    }
 });
+
 
 // Добавим также команду /stats_dates для просмотра дат, за которые есть статистика
 bot.onText(/\/tests_dates/, (msg) => {
